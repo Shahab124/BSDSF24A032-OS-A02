@@ -1,6 +1,6 @@
 /*
-* Programming Assignment 02: ls v1.4.0
-* Feature added: names are sorted alphabetically (qsort) in every display mode
+* Programming Assignment 02: ls v1.5.0
+* Feature added: names are printed in color depending on the file type
 * Usage:
 *       $ ./bin/ls            (down then across)
 *       $ ./bin/ls -l         (long listing)
@@ -29,12 +29,23 @@ extern int errno;
 
 int display_mode = MODE_DOWN;   /* set by the options in main() */
 
+/* ANSI escape codes: print one of these, then the text, then COLOR_RESET */
+#define COLOR_BLUE    "\033[0;34m"  /* directory */
+#define COLOR_GREEN   "\033[0;32m"  /* executable */
+#define COLOR_RED     "\033[0;31m"  /* archive: .tar .gz .zip */
+#define COLOR_PINK    "\033[0;35m"  /* symbolic link */
+#define COLOR_REVERSE "\033[7m"     /* special file: device, socket, pipe */
+#define COLOR_RESET   "\033[0m"     /* back to normal */
+
 void do_ls(const char *dir);
 char **read_names(const char *dir, int *count, int *maxlen);
 int compare_names(const void *a, const void *b);
 void long_listing(const char *dir, char **names, int n);
-void print_down_across(char **names, int n, int maxlen);
-void print_across(char **names, int n, int maxlen);
+void print_down_across(const char *dir, char **names, int n, int maxlen);
+void print_across(const char *dir, char **names, int n, int maxlen);
+mode_t get_mode(const char *dir, const char *name);
+void print_colored(const char *name, mode_t mode);
+int is_archive(const char *name);
 int terminal_width(void);
 void print_permissions(mode_t mode);
 void print_time(time_t mtime);
@@ -95,9 +106,9 @@ void do_ls(const char *dir)
     if (display_mode == MODE_LONG)
         long_listing(dir, names, n);
     else if (display_mode == MODE_ACROSS)
-        print_across(names, n, maxlen);
+        print_across(dir, names, n, maxlen);
     else
-        print_down_across(names, n, maxlen);
+        print_down_across(dir, names, n, maxlen);
 
     /* step 4: free every string, then the array itself */
     for (int i = 0; i < n; i++)
@@ -186,7 +197,7 @@ char **read_names(const char *dir, int *count, int *maxlen)
  *      b  e
  *      c  f
  */
-void print_down_across(char **names, int n, int maxlen)
+void print_down_across(const char *dir, char **names, int n, int maxlen)
 {
     if (n == 0)
         return;
@@ -204,7 +215,9 @@ void print_down_across(char **names, int n, int maxlen)
             int i = r + c * rows;               /* item in row r of column c */
             if (i >= n)
                 break;
-            printf("%-*s", col_width, names[i]);    /* pad to column width */
+            print_colored(names[i], get_mode(dir, names[i]));
+            /* pad with spaces ourselves: color codes are invisible but %-*s would count them */
+            printf("%*s", col_width - (int)strlen(names[i]), "");
         }
         printf("\n");
     }
@@ -217,7 +230,7 @@ void print_down_across(char **names, int n, int maxlen)
  *      d  e  f
  *      g
  */
-void print_across(char **names, int n, int maxlen)
+void print_across(const char *dir, char **names, int n, int maxlen)
 {
     int col_width = maxlen + 2;     /* 2 spaces between columns */
     int width = terminal_width();
@@ -231,11 +244,57 @@ void print_across(char **names, int n, int maxlen)
             printf("\n");
             pos = 0;
         }
-        printf("%-*s", col_width, names[i]);    /* pad to column width */
+        print_colored(names[i], get_mode(dir, names[i]));
+        printf("%*s", col_width - (int)strlen(names[i]), "");   /* padding spaces */
         pos += col_width;
     }
     if (n > 0)
         printf("\n");
+}
+
+/* Returns st_mode of the file "dir/name" (uses lstat so links are seen as links) */
+mode_t get_mode(const char *dir, const char *name)
+{
+    char path[1024];
+    struct stat st;
+
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (lstat(path, &st) == -1)
+        return 0;           /* unknown: will be printed without color */
+    return st.st_mode;
+}
+
+/* Returns 1 if the name ends with .tar, .gz or .zip, otherwise 0 */
+int is_archive(const char *name)
+{
+    const char *dot = strrchr(name, '.');   /* last '.' in the name */
+    if (dot == NULL)
+        return 0;
+    if (strcmp(dot, ".tar") == 0 || strcmp(dot, ".gz") == 0 || strcmp(dot, ".zip") == 0)
+        return 1;
+    return 0;
+}
+
+/* Prints the name in the color that matches its file type */
+void print_colored(const char *name, mode_t mode)
+{
+    const char *color = NULL;   /* NULL = no color */
+
+    if (S_ISLNK(mode))
+        color = COLOR_PINK;
+    else if (S_ISDIR(mode))
+        color = COLOR_BLUE;
+    else if (S_ISCHR(mode) || S_ISBLK(mode) || S_ISSOCK(mode) || S_ISFIFO(mode))
+        color = COLOR_REVERSE;
+    else if (is_archive(name))
+        color = COLOR_RED;
+    else if (mode & (S_IXUSR | S_IXGRP | S_IXOTH))     /* any execute bit on */
+        color = COLOR_GREEN;
+
+    if (color == NULL)
+        printf("%s", name);
+    else
+        printf("%s%s%s", color, name, COLOR_RESET);
 }
 
 /* Width of the terminal in characters (80 if we can't find out) */
@@ -311,7 +370,8 @@ void long_listing(const char *dir, char **names, int n)
         else
             printf(" %*ld ", w_size, (long)st.st_size);
         print_time(st.st_mtime);
-        printf(" %s", names[i]);
+        printf(" ");
+        print_colored(names[i], st.st_mode);
 
         /* symbolic link: also show where it points */
         if (S_ISLNK(st.st_mode))

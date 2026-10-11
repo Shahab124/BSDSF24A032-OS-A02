@@ -175,3 +175,47 @@ element is a `char **`. We cast to `const char **` and dereference it once to ge
 **Hidden files (optional task):** `strcmp` compares byte values. `.` (46) is smaller than digits, capital letters and
 lowercase letters, so if hidden files were included they would simply be sorted first. No change to the sorting code
 would be needed.
+
+---
+
+## Feature 6: ls-v1.5.0 – Colorized Output Based on File Type
+
+### Q1. How do ANSI escape codes produce color in a Linux terminal? Show the code for green text.
+
+An ANSI escape code is a special sequence of characters that the **terminal** understands as a command instead of text
+to display. It starts with the ESC character (ASCII 27, written `\033` in C), followed by `[`, one or more numbers
+separated by `;`, and ends with `m` (meaning "set graphics mode"). The terminal does not print these characters. It
+changes the color/style of the text that follows until another code changes it. `\033[0m` resets everything to normal.
+
+Common numbers: `0` reset, `7` reverse video, `31` red, `32` green, `34` blue, `35` magenta (pink).
+
+Printing text in green:
+
+```c
+printf("\033[0;32m" "run.sh" "\033[0m");   /* ESC[0;32m  text  ESC[0m */
+```
+
+`0;32` means "normal style, green foreground". The final `\033[0m` resets the color so the next name is not green.
+Because the codes take characters but no screen space, my column code pads with `strlen(name)` (the visible length)
+instead of using `%-*s` on the colored string.
+
+### Q2. Which `st_mode` bits do you check to know if a file is executable by owner, group or others?
+
+There are three execute bits in `st_mode`:
+
+| Macro     | Octal | Meaning                 |
+|-----------|-------|-------------------------|
+| `S_IXUSR` | 0100  | execute by **owner**    |
+| `S_IXGRP` | 0010  | execute by **group**    |
+| `S_IXOTH` | 0001  | execute by **others**   |
+
+Each is tested with bitwise AND. I color a file green if **any** of the three is set:
+
+```c
+if (mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+    color = COLOR_GREEN;
+```
+
+The `|` combines the three bits into one mask (0111), and `&` is non-zero if at least one of them is on in the file's
+mode. This check is done **after** the directory test, because directories also have execute bits (for them it means
+"can enter"), and they must be blue, not green.
