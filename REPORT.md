@@ -46,3 +46,48 @@ if (st.st_mode & S_IXOTH) p[9] = 'x';   /* others can execute (0001) */
 
 Special bits work the same way: `S_ISUID` (setuid), `S_ISGID` (setgid) and `S_ISVTX` (sticky). In my code they replace
 the `x` with `s`/`t` (or `S`/`T` if the execute bit is off), just like the real `ls`.
+
+---
+
+## Feature 3: ls-v1.2.0 – Column Display (Down Then Across)
+
+### Q1. Explain the general logic for printing in a "down then across" format. Why is a single loop insufficient?
+
+First, all names are read into an array and the longest name is found. Then:
+
+1. `col_width = maxlen + 2` (2 spaces between columns)
+2. `cols = terminal_width / col_width` (at least 1)
+3. `rows = ceil(n / cols)` computed as `(n + cols - 1) / cols`
+
+The screen is printed **row by row**, but the names are laid out **column by column**. So for row `r` and column `c`
+the name to print is `names[r + c * rows]`:
+
+```c
+for (r = 0; r < rows; r++) {
+    for (c = 0; c < cols; c++) {
+        i = r + c * rows;
+        if (i >= n) break;
+        printf("%-*s", col_width, names[i]);
+    }
+    printf("\n");
+}
+```
+
+A single loop `for (i = 0; i < n; i++)` prints the names in array order, i.e. **left to right**. That gives
+"across" order, but in "down then across" the neighbour of `names[0]` on the screen is `names[rows]`, not `names[1]`.
+A terminal can only print forwards, line by line (we cannot go back up to fill a column), so we need two nested loops
+and the index formula, and we must know `rows` (which needs `n` and `maxlen`) before printing anything.
+
+### Q2. What is the purpose of `ioctl` here? What are the limitations of a fixed 80-column width?
+
+`ioctl(STDOUT_FILENO, TIOCGWINSZ, &w)` asks the terminal driver for the current window size. It fills a
+`struct winsize`, and `w.ws_col` is the number of columns. We use it to decide how many filename columns fit.
+
+If we always assumed 80 columns:
+- On a **wide** terminal (e.g. 200 columns) we would use less than half the screen and print many more rows than needed.
+- On a **narrow** terminal (e.g. 40 columns) lines would be longer than the screen, so they wrap and the columns
+  become broken and unreadable.
+- The output would not adapt when the user resizes the window.
+
+The 80-column value is only a fallback for when `ioctl` fails, e.g. when the output is redirected to a file or a pipe
+(there is no terminal to ask).
