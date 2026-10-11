@@ -91,3 +91,41 @@ If we always assumed 80 columns:
 
 The 80-column value is only a fallback for when `ioctl` fails, e.g. when the output is redirected to a file or a pipe
 (there is no terminal to ask).
+
+---
+
+## Feature 4: ls-v1.3.0 – Horizontal Column Display (-x Option)
+
+### Q1. Compare the complexity of "down then across" vs "across" printing. Which needs more pre-calculation and why?
+
+**"Down then across" needs more pre-calculation.** Before printing the first line it must know:
+- the longest name (column width),
+- the terminal width → number of columns,
+- the total number of names → number of **rows**,
+
+because the name printed next to `names[0]` is `names[rows]`. Without `rows` we cannot know which element goes where.
+It also needs two nested loops (rows, columns) and the index formula `r + c * rows`.
+
+**"Across" (-x) is simpler.** It only needs the column width and the terminal width. It walks through the array
+once, in normal order, and keeps a counter `pos` of how many characters are on the current line. When
+`pos + col_width > width`, it prints `\n` and resets `pos` to 0. It does not need to know the number of rows or even
+the total number of files in advance.
+
+### Q2. Describe the strategy used to manage the display modes (-l, -x, default). How does the program decide which function to call?
+
+I use one global integer, `display_mode`, with three named values:
+
+```c
+#define MODE_DOWN   0   /* default */
+#define MODE_LONG   1   /* -l */
+#define MODE_ACROSS 2   /* -x */
+int display_mode = MODE_DOWN;
+```
+
+In `main()`, the `getopt(argc, argv, "lx")` loop sets `display_mode = MODE_LONG` for `-l` and
+`display_mode = MODE_ACROSS` for `-x`. If neither is given it stays `MODE_DOWN`. If both are given, the last one wins,
+like the real `ls`.
+
+In `do_ls()`, after reading all names into the array, a single `if / else if / else` checks `display_mode` and calls
+`long_listing()`, `print_across()` or `print_down_across()`. Because every display function receives the same array,
+adding a new mode only needs one new value, one `getopt` case and one new function.
