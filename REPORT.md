@@ -219,3 +219,39 @@ if (mode & (S_IXUSR | S_IXGRP | S_IXOTH))
 The `|` combines the three bits into one mask (0111), and `&` is non-zero if at least one of them is on in the file's
 mode. This check is done **after** the directory test, because directories also have execute bits (for them it means
 "can enter"), and they must be blue, not green.
+
+---
+
+## Feature 7: ls-v1.6.0 – Recursive Listing (-R Option)
+
+### Q1. What is a "base case" in a recursive function? What is the base case in my recursive `ls`?
+
+A **base case** is the condition under which a recursive function **stops calling itself** and simply returns. Without
+one, the function would call itself forever until the stack overflows and the program crashes.
+
+In my `do_ls()` the recursion stops when a directory contains **no subdirectories to enter**:
+- `do_ls()` only calls itself for entries where `S_ISDIR(st.st_mode)` is true. A directory with only files (a "leaf"
+  of the directory tree) makes no recursive call, so that call simply finishes and returns.
+- `.` and `..` are **skipped**. `.` is the directory itself and `..` is its parent. Recursing into them would list the
+  same directories again and again forever.
+- `lstat()` is used, so a **symbolic link** to a directory is seen as a link (`S_ISLNK`), not a directory, and is not
+  followed. This prevents infinite loops when a link points back to a parent directory.
+- If `opendir()` fails (e.g. no permission), `read_names()` returns `NULL` and `do_ls()` returns immediately.
+
+Because a real directory tree is finite and we never go back up, every path eventually reaches a leaf directory.
+
+### Q2. Why must a full path (e.g. "parent_dir/subdir") be built before the recursive call? What happens with `do_ls("subdir")`?
+
+`readdir()` only returns the **name** of an entry (e.g. `"subdir"`), not its location. When the program opens a
+path like `"subdir"` the kernel looks it up **relative to the current working directory** of the process, which is
+the directory where the user ran `ls`, **not** `parent_dir`. Our program never changes its working directory.
+
+So inside `do_ls("parent_dir")`, calling `do_ls("subdir")` would try to open `./subdir`:
+- usually it does not exist there, so `opendir()` fails with "Cannot open directory : subdir";
+- or, worse, an unrelated directory with the same name exists in the current directory and the wrong directory is
+  listed.
+
+The same is true for `lstat("subdir")`, which would test the wrong file. Building the full path with
+`snprintf(path, sizeof(path), "%s/%s", dir, names[i])` gives `"parent_dir/subdir"`, and at the next level
+`"parent_dir/subdir/child"`, so every call always knows the exact location of the directory it lists. It also prints
+the correct heading (`parent_dir/subdir:`), just like the real `ls -R`.

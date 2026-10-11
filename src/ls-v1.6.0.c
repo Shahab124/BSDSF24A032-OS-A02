@@ -1,11 +1,12 @@
 /*
-* Programming Assignment 02: ls v1.5.0
-* Feature added: names are printed in color depending on the file type
+* Programming Assignment 02: ls v1.6.0
+* Feature added: -R option (recursive listing of all subdirectories)
 * Usage:
 *       $ ./bin/ls            (down then across)
 *       $ ./bin/ls -l         (long listing)
 *       $ ./bin/ls -x         (across)
-*       $ ./bin/ls -x /home /etc
+*       $ ./bin/ls -R src     (recursive)
+*       $ ./bin/ls -lR /etc   (options can be combined)
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,7 @@ extern int errno;
 #define MODE_ACROSS 2   /* -x */
 
 int display_mode = MODE_DOWN;   /* set by the options in main() */
+int recursive_flag = 0;         /* becomes 1 when the user gives -R */
 
 /* ANSI escape codes: print one of these, then the text, then COLOR_RESET */
 #define COLOR_BLUE    "\033[0;34m"  /* directory */
@@ -57,18 +59,20 @@ int main(int argc, char *argv[])
 {
     int opt;
 
-    /* getopt() reads options one by one; "lx" means we accept -l and -x */
-    /* if both are given, the last one wins (same as the real ls) */
-    while ((opt = getopt(argc, argv, "lx")) != -1)
+    /* getopt() reads options one by one; "lxR" means we accept -l, -x and -R */
+    /* if -l and -x are both given, the last one wins (same as the real ls) */
+    while ((opt = getopt(argc, argv, "lxR")) != -1)
     {
         if (opt == 'l')
             display_mode = MODE_LONG;
         else if (opt == 'x')
             display_mode = MODE_ACROSS;
+        else if (opt == 'R')
+            recursive_flag = 1;
         else
         {
             /* getopt already printed "invalid option" */
-            fprintf(stderr, "Usage: %s [-l] [-x] [dir...]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-l] [-x] [-R] [dir...]\n", argv[0]);
             exit(1);
         }
     }
@@ -82,9 +86,19 @@ int main(int argc, char *argv[])
     {
         for (int i = optind; i < argc; i++)
         {
-            printf("Directory listing of %s : \n", argv[i]);
-            do_ls(argv[i]);
-            puts("");
+            if (recursive_flag)
+            {
+                /* do_ls() prints its own "dir:" heading; blank line between directories */
+                if (i > optind)
+                    printf("\n");
+                do_ls(argv[i]);
+            }
+            else
+            {
+                printf("Directory listing of %s : \n", argv[i]);
+                do_ls(argv[i]);
+                puts("");
+            }
         }
     }
     return 0;
@@ -93,6 +107,10 @@ int main(int argc, char *argv[])
 void do_ls(const char *dir)
 {
     int n, maxlen;
+
+    /* -R: print the name of the directory first, like "src:" */
+    if (recursive_flag)
+        printf("%s:\n", dir);
 
     /* step 1: read ALL names first (we need the longest one before printing) */
     char **names = read_names(dir, &n, &maxlen);
@@ -110,7 +128,33 @@ void do_ls(const char *dir)
     else
         print_down_across(dir, names, n, maxlen);
 
-    /* step 4: free every string, then the array itself */
+    /* step 4 (-R only): go into every subdirectory and list it too */
+    if (recursive_flag)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            /* skip "." (this directory) and ".." (parent), or we would loop forever */
+            if (strcmp(names[i], ".") == 0 || strcmp(names[i], "..") == 0)
+                continue;
+
+            /* build the full path "dir/name" */
+            char path[1024];
+            snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+
+            /* lstat: a symbolic link to a directory is NOT followed */
+            struct stat st;
+            if (lstat(path, &st) == -1)
+                continue;
+
+            if (S_ISDIR(st.st_mode))
+            {
+                printf("\n");       /* blank line between directory blocks */
+                do_ls(path);        /* recursive call with the full path */
+            }
+        }
+    }
+
+    /* step 5: free every string, then the array itself */
     for (int i = 0; i < n; i++)
         free(names[i]);
     free(names);
