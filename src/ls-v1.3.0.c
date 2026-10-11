@@ -1,11 +1,11 @@
 /*
-* Programming Assignment 02: ls v1.2.0
-* Feature added: default output in columns ("down then across"),
-*                fitted to the width of the terminal
+* Programming Assignment 02: ls v1.3.0
+* Feature added: -x option (horizontal "across" columns)
 * Usage:
-*       $ ./bin/ls
-*       $ ./bin/ls -l
-*       $ ./bin/ls /home /etc
+*       $ ./bin/ls            (down then across)
+*       $ ./bin/ls -l         (long listing)
+*       $ ./bin/ls -x         (across)
+*       $ ./bin/ls -x /home /etc
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,12 +22,18 @@
 
 extern int errno;
 
-int long_flag = 0;      /* becomes 1 when the user gives -l */
+/* the three display modes */
+#define MODE_DOWN   0   /* default: down then across */
+#define MODE_LONG   1   /* -l */
+#define MODE_ACROSS 2   /* -x */
+
+int display_mode = MODE_DOWN;   /* set by the options in main() */
 
 void do_ls(const char *dir);
 char **read_names(const char *dir, int *count, int *maxlen);
 void long_listing(const char *dir, char **names, int n);
 void print_down_across(char **names, int n, int maxlen);
+void print_across(char **names, int n, int maxlen);
 int terminal_width(void);
 void print_permissions(mode_t mode);
 void print_time(time_t mtime);
@@ -39,15 +45,18 @@ int main(int argc, char *argv[])
 {
     int opt;
 
-    /* getopt() reads options one by one; "l" means we only accept -l */
-    while ((opt = getopt(argc, argv, "l")) != -1)
+    /* getopt() reads options one by one; "lx" means we accept -l and -x */
+    /* if both are given, the last one wins (same as the real ls) */
+    while ((opt = getopt(argc, argv, "lx")) != -1)
     {
         if (opt == 'l')
-            long_flag = 1;
+            display_mode = MODE_LONG;
+        else if (opt == 'x')
+            display_mode = MODE_ACROSS;
         else
         {
             /* getopt already printed "invalid option" */
-            fprintf(stderr, "Usage: %s [-l] [dir...]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-l] [-x] [dir...]\n", argv[0]);
             exit(1);
         }
     }
@@ -78,9 +87,11 @@ void do_ls(const char *dir)
     if (names == NULL)
         return;
 
-    /* step 2: display */
-    if (long_flag)
+    /* step 2: display, using the mode chosen in main() */
+    if (display_mode == MODE_LONG)
         long_listing(dir, names, n);
+    else if (display_mode == MODE_ACROSS)
+        print_across(names, n, maxlen);
     else
         print_down_across(names, n, maxlen);
 
@@ -180,6 +191,34 @@ void print_down_across(char **names, int n, int maxlen)
         }
         printf("\n");
     }
+}
+
+/*
+ * -x display: left to right, start a new line when the next name won't fit.
+ * Example with 7 names:
+ *      a  b  c
+ *      d  e  f
+ *      g
+ */
+void print_across(char **names, int n, int maxlen)
+{
+    int col_width = maxlen + 2;     /* 2 spaces between columns */
+    int width = terminal_width();
+    int pos = 0;                    /* how many characters are already on this line */
+
+    for (int i = 0; i < n; i++)
+    {
+        /* the next name would go past the right edge: go to a new line */
+        if (pos > 0 && pos + col_width > width)
+        {
+            printf("\n");
+            pos = 0;
+        }
+        printf("%-*s", col_width, names[i]);    /* pad to column width */
+        pos += col_width;
+    }
+    if (n > 0)
+        printf("\n");
 }
 
 /* Width of the terminal in characters (80 if we can't find out) */
