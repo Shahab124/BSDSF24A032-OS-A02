@@ -129,3 +129,49 @@ like the real `ls`.
 In `do_ls()`, after reading all names into the array, a single `if / else if / else` checks `display_mode` and calls
 `long_listing()`, `print_across()` or `print_down_across()`. Because every display function receives the same array,
 adding a new mode only needs one new value, one `getopt` case and one new function.
+
+---
+
+## Feature 5: ls-v1.4.0 – Alphabetical Sort
+
+### Q1. Why must all directory entries be read into memory before sorting? What are the drawbacks for directories with millions of files?
+
+`readdir()` returns entries one at a time in the order they are stored in the directory (not alphabetical). To know
+which name comes **first**, you have to compare it with **every** other name, and the very last entry returned by
+`readdir()` could be the alphabetically first one. So no name can be printed until all names have been seen. `qsort()`
+also needs a complete array in memory to work on.
+
+Drawbacks with millions of files:
+- **Memory:** every name is `strdup`'d (one `malloc` each) plus one pointer per name in the array. Millions of entries can
+  use hundreds of MB of RAM, and could fail with out-of-memory.
+- **Delay:** nothing is printed until the whole directory is read and sorted (O(n log n)), so the user sees no output for a
+  long time, instead of output starting immediately.
+- **realloc cost:** the array is doubled and copied several times as it grows.
+
+### Q2. Explain the purpose and signature of the `qsort()` comparison function. How does it work, and why `const void *`?
+
+```c
+void qsort(void *base, size_t nmemb, size_t size,
+           int (*compar)(const void *, const void *));
+
+int compare_names(const void *a, const void *b)
+{
+    const char *name1 = *(const char **)a;
+    const char *name2 = *(const char **)b;
+    return strcmp(name1, name2);
+}
+```
+
+`qsort()` knows how to **move** elements around, but not how to **compare** them, because it does not know their type. So we
+pass it a pointer to our own function (a function pointer). `qsort` calls it with pointers to two elements, and the
+function must return a **negative** number if the first should come first, **0** if they are equal, and a **positive**
+number if the second should come first. `strcmp()` already returns exactly that for strings.
+
+The arguments are `void *` because `qsort` is **generic**: the same `qsort` sorts ints, structs, strings, etc., and
+`void *` is C's "pointer to anything". They are `const` because the comparison must only read the elements, never
+change them. Inside the function we cast back to the real type. Our array elements are `char *`, so a pointer to an
+element is a `char **`. We cast to `const char **` and dereference it once to get the actual string.
+
+**Hidden files (optional task):** `strcmp` compares byte values. `.` (46) is smaller than digits, capital letters and
+lowercase letters, so if hidden files were included they would simply be sorted first. No change to the sorting code
+would be needed.

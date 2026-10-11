@@ -1,6 +1,6 @@
 /*
-* Programming Assignment 02: ls v1.3.0
-* Feature added: -x option (horizontal "across" columns)
+* Programming Assignment 02: ls v1.4.0
+* Feature added: names are sorted alphabetically (qsort) in every display mode
 * Usage:
 *       $ ./bin/ls            (down then across)
 *       $ ./bin/ls -l         (long listing)
@@ -31,6 +31,7 @@ int display_mode = MODE_DOWN;   /* set by the options in main() */
 
 void do_ls(const char *dir);
 char **read_names(const char *dir, int *count, int *maxlen);
+int compare_names(const void *a, const void *b);
 void long_listing(const char *dir, char **names, int n);
 void print_down_across(char **names, int n, int maxlen);
 void print_across(char **names, int n, int maxlen);
@@ -87,7 +88,10 @@ void do_ls(const char *dir)
     if (names == NULL)
         return;
 
-    /* step 2: display, using the mode chosen in main() */
+    /* step 2: sort the names alphabetically (all display modes get the sorted array) */
+    qsort(names, n, sizeof(char *), compare_names);
+
+    /* step 3: display, using the mode chosen in main() */
     if (display_mode == MODE_LONG)
         long_listing(dir, names, n);
     else if (display_mode == MODE_ACROSS)
@@ -95,10 +99,23 @@ void do_ls(const char *dir)
     else
         print_down_across(names, n, maxlen);
 
-    /* step 3: free every string, then the array itself */
+    /* step 4: free every string, then the array itself */
     for (int i = 0; i < n; i++)
         free(names[i]);
     free(names);
+}
+
+/*
+ * Comparison function for qsort().
+ * qsort gives us POINTERS TO the array elements. Our elements are char*,
+ * so each argument is really a char** — cast it, then compare the strings.
+ * Returns <0 if a comes first, 0 if equal, >0 if b comes first.
+ */
+int compare_names(const void *a, const void *b)
+{
+    const char *name1 = *(const char **)a;
+    const char *name2 = *(const char **)b;
+    return strcmp(name1, name2);
 }
 
 /*
