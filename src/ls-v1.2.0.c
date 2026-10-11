@@ -1,10 +1,11 @@
 /*
-* Programming Assignment 02: ls v1.1.0
-* Feature added: -l option (long listing format)
+* Programming Assignment 02: ls v1.2.0
+* Feature added: default output in columns ("down then across"),
+*                fitted to the width of the terminal
 * Usage:
 *       $ ./bin/ls
 *       $ ./bin/ls -l
-*       $ ./bin/ls -l /home /etc
+*       $ ./bin/ls /home /etc
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,13 +18,17 @@
 #include <grp.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>  /* major(), minor() for device files */
+#include <sys/ioctl.h>      /* ioctl(), TIOCGWINSZ for terminal size */
 
 extern int errno;
 
 int long_flag = 0;      /* becomes 1 when the user gives -l */
 
 void do_ls(const char *dir);
-void long_listing(const char *dir);
+char **read_names(const char *dir, int *count, int *maxlen);
+void long_listing(const char *dir, char **names, int n);
+void print_down_across(char **names, int n, int maxlen);
+int terminal_width(void);
 void print_permissions(mode_t mode);
 void print_time(time_t mtime);
 const char *user_name(uid_t uid);
@@ -66,27 +71,74 @@ int main(int argc, char *argv[])
 
 void do_ls(const char *dir)
 {
-    /* -l given: use the new long listing function */
-    if (long_flag)
-    {
-        long_listing(dir);
-        return;
-    }
+    int n, maxlen;
 
-    /* otherwise: original simple display */
+    /* step 1: read ALL names first (we need the longest one before printing) */
+    char **names = read_names(dir, &n, &maxlen);
+    if (names == NULL)
+        return;
+
+    /* step 2: display */
+    if (long_flag)
+        long_listing(dir, names, n);
+    else
+        print_down_across(names, n, maxlen);
+
+    /* step 3: free every string, then the array itself */
+    for (int i = 0; i < n; i++)
+        free(names[i]);
+    free(names);
+}
+
+/*
+ * Reads all non-hidden names of 'dir' into a dynamically growing array of strings.
+ * Returns the array, puts the number of names in *count
+ * and the length of the longest name in *maxlen.
+ */
+char **read_names(const char *dir, int *count, int *maxlen)
+{
     struct dirent *entry;
+    int capacity = 16;      /* start with room for 16 names */
+    int n = 0;
+
     DIR *dp = opendir(dir);
     if (dp == NULL)
     {
         fprintf(stderr, "Cannot open directory : %s\n", dir);
-        return;
+        return NULL;
     }
+
+    char **names = malloc(capacity * sizeof(char *));
+    if (names == NULL)
+    {
+        perror("malloc");
+        exit(1);
+    }
+
+    *maxlen = 0;
     errno = 0;
     while ((entry = readdir(dp)) != NULL)
     {
         if (entry->d_name[0] == '.')
             continue;
-        printf("%s\n", entry->d_name);
+
+        /* array full: double its size */
+        if (n == capacity)
+        {
+            capacity *= 2;
+            names = realloc(names, capacity * sizeof(char *));
+            if (names == NULL)
+            {
+                perror("realloc");
+                exit(1);
+            }
+        }
+
+        names[n] = strdup(entry->d_name);   /* malloc + copy of the name */
+        int len = strlen(entry->d_name);
+        if (len > *maxlen)
+            *maxlen = len;
+        n++;
     }
 
     if (errno != 0)
@@ -95,37 +147,68 @@ void do_ls(const char *dir)
     }
 
     closedir(dp);
+    *count = n;
+    return names;
 }
 
 /*
- * Prints every file of 'dir' like "ls -l".
- * We read the directory twice:
- *   pass 1: find the widest value of each column (for alignment) and the total blocks
- *   pass 2: print each line using those widths
+ * Default display: fill columns top to bottom, then move right.
+ * Example with 7 names and 3 rows:
+ *      a  d  g
+ *      b  e
+ *      c  f
  */
-void long_listing(const char *dir)
+void print_down_across(char **names, int n, int maxlen)
 {
-    struct dirent *entry;
+    if (n == 0)
+        return;
+
+    int col_width = maxlen + 2;                 /* 2 spaces between columns */
+    int cols = terminal_width() / col_width;
+    if (cols < 1)
+        cols = 1;                               /* a very long name still gets 1 column */
+    int rows = (n + cols - 1) / cols;           /* n / cols, rounded up */
+
+    for (int r = 0; r < rows; r++)
+    {
+        for (int c = 0; c < cols; c++)
+        {
+            int i = r + c * rows;               /* item in row r of column c */
+            if (i >= n)
+                break;
+            printf("%-*s", col_width, names[i]);    /* pad to column width */
+        }
+        printf("\n");
+    }
+}
+
+/* Width of the terminal in characters (80 if we can't find out) */
+int terminal_width(void)
+{
+    struct winsize w;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && w.ws_col > 0)
+        return w.ws_col;
+    return 80;
+}
+
+/*
+ * Prints the names like "ls -l".
+ * pass 1: find the widest value of each column (for alignment) and the total blocks
+ * pass 2: print each line using those widths
+ */
+void long_listing(const char *dir, char **names, int n)
+{
     struct stat st;
     char path[1024];
     int w_links = 0, w_user = 0, w_group = 0, w_size = 0;
     int w_major = 0, w_minor = 0;   /* for device files */
     long total = 0;
 
-    DIR *dp = opendir(dir);
-    if (dp == NULL)
-    {
-        fprintf(stderr, "Cannot open directory : %s\n", dir);
-        return;
-    }
-
     /* ---- pass 1: column widths ---- */
-    while ((entry = readdir(dp)) != NULL)
+    for (int i = 0; i < n; i++)
     {
-        if (entry->d_name[0] == '.')
-            continue;
         /* full path "dir/name" so lstat works for any directory */
-        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
         if (lstat(path, &st) == -1)
             continue;
 
@@ -150,12 +233,9 @@ void long_listing(const char *dir)
     printf("total %ld\n", total / 2);
 
     /* ---- pass 2: print ---- */
-    rewinddir(dp);      /* go back to the first entry */
-    while ((entry = readdir(dp)) != NULL)
+    for (int i = 0; i < n; i++)
     {
-        if (entry->d_name[0] == '.')
-            continue;
-        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
         if (lstat(path, &st) == -1)
         {
             perror(path);
@@ -175,22 +255,21 @@ void long_listing(const char *dir)
         else
             printf(" %*ld ", w_size, (long)st.st_size);
         print_time(st.st_mtime);
-        printf(" %s", entry->d_name);
+        printf(" %s", names[i]);
 
         /* symbolic link: also show where it points */
         if (S_ISLNK(st.st_mode))
         {
             char target[1024];
-            ssize_t n = readlink(path, target, sizeof(target) - 1);
-            if (n != -1)
+            ssize_t len = readlink(path, target, sizeof(target) - 1);
+            if (len != -1)
             {
-                target[n] = '\0';
+                target[len] = '\0';
                 printf(" -> %s", target);
             }
         }
         printf("\n");
     }
-    closedir(dp);
 }
 
 /* Converts st_mode into a string like "drwxr-xr-x" */
