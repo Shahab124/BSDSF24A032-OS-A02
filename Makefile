@@ -4,7 +4,7 @@
 CC = gcc
 CFLAGS = -Wall
 
-SRC = src/ls-v1.5.0.c
+SRC = src/ls-v1.6.0.c
 TARGET = bin/ls
 
 # 'make' runs the first target: build bin/ls
